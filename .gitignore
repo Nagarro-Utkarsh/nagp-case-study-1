@@ -1,0 +1,16 @@
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Build outputs and dependencies
+node_modules/
+**/target/
+.svelte-kit/
+dist/
+build/
+
+# Environment files
+.env
+.env.*
+!.env.example
