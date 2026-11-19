@@ -1,3 +1,9 @@
+# Private / local-only
+infrastructure/
+personal-notes/
+Assignment.txt
+Deliverables.txt
+
 # IDE / OS
 .idea/
 .vscode/
