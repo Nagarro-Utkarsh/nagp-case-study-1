@@ -1,0 +1,1020 @@
+openapi: 3.0.3
+info:
+  title: HabitLoop API
+  version: 1.0.0
+  description: |
+    Combined API specification for the six HabitLoop microservices.
+
+    | Service | Local base URL | Path prefixes |
+    |---|---|---|
+    | User | http://localhost:8081 | `/api/auth`, `/api/users` |
+    | Activity | http://localhost:8082 | `/api/habits` |
+    | Challenge | http://localhost:8083 | `/api/communities`, `/api/challenges`, `/api/invites` |
+    | Integration | http://localhost:8084 | `/api/integrations` |
+    | Analytics | http://localhost:8085 | `/api/analytics` |
+    | Recommendation | http://localhost:8086 | `/api/recommendations` |
+
+    In the cloud deployment all `/api/*` paths are served from the single CloudFront domain and
+    routed by the Application Load Balancer to the owning service, so the same paths work against
+    one base URL (`https://<cloudfront-domain>`). The frontend dev server (http://localhost:5173)
+    proxies the same paths locally.
+
+    **Authentication**
+    - `bearerAuth` — JWT returned by signup/login; required on all `/api/**` routes except signup/login
+      and partner event ingestion.
+    - `wearableApiKey` — one-time per-connection key (`X-Api-Key`) for partner devices.
+    - `internalKey` — shared service key (`X-Internal-Key`) for `/internal/**` service-to-service routes.
+      Internal routes are reachable only inside the private network and are not exposed through the
+      load balancer.
+
+    Errors use RFC 7807 problem details, e.g.
+    `{"type": "about:blank", "title": "Not Found", "status": 404, "detail": "Habit not found", "instance": "/api/habits/..."}`.
+    Validation failures add an `errors` map of field → message.
+servers:
+  - url: http://localhost:5173
+    description: Local – frontend dev proxy (all services through one origin)
+  - url: https://{cloudfrontDomain}
+    description: AWS – CloudFront distribution
+    variables:
+      cloudfrontDomain:
+        default: dxxxxxxxxxxxxx.cloudfront.net
+tags:
+  - name: Auth
+    description: User Service – signup and login
+  - name: Users
+    description: User Service – profiles
+  - name: Habits
+    description: Activity Service – habits, schedules and activity logs
+  - name: Communities
+    description: Challenge Service – communities and invites
+  - name: Challenges
+    description: Challenge Service – challenges and leaderboards
+  - name: Integrations
+    description: Integration Service – partner connections and events
+  - name: Analytics
+    description: Analytics Service – dashboard, trends, cohorts and live updates
+  - name: Recommendations
+    description: Recommendation Service – timing and frequency suggestions
+  - name: Internal
+    description: Private service-to-service endpoints (X-Internal-Key)
+security:
+  - bearerAuth: []
+paths:
+  # ---------------------------------------------------------------- User Service
+  /api/auth/signup:
+    post:
+      operationId: signup
+      tags: [Auth]
+      summary: Register a new user in a workspace (tenant)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignupRequest' }
+            example: { email: demo@example.com, password: HabitLoopDemo1, name: Demo User, tenantSlug: public }
+      responses:
+        '200': { $ref: '#/components/responses/Token' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: An account with this email already exists in the workspace
+          content: { application/problem+json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /api/auth/login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Log in and receive a JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { email: demo@example.com, password: HabitLoopDemo1, tenantSlug: public }
+      responses:
+        '200': { $ref: '#/components/responses/Token' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/users/me:
+    get:
+      operationId: getMyProfile
+      tags: [Users]
+      summary: Get the current user's profile
+      responses:
+        '200':
+          description: Profile
+          content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      operationId: updateMyProfile
+      tags: [Users]
+      summary: Update the current user's name and timezone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfileUpdate' }
+      responses:
+        '200':
+          description: Updated profile
+          content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/users:
+    get:
+      operationId: findUserByEmail
+      tags: [Users]
+      summary: Look up a user in the caller's tenant by email (used for invites)
+      parameters:
+        - { name: email, in: query, required: true, schema: { type: string, format: email } }
+      responses:
+        '200':
+          description: Profile
+          content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Activity Service
+  /api/habits:
+    get:
+      operationId: listHabits
+      tags: [Habits]
+      summary: List the current user's habits (newest first)
+      responses:
+        '200':
+          description: Habits
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Habit' } }
+    post:
+      operationId: createHabit
+      tags: [Habits]
+      summary: Create a habit with a schedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HabitRequest' }
+            example: { name: Morning walk, category: fitness, frequency: DAILY, daysOfWeek: [1, 2, 3, 4, 5, 6, 7], preferredTime: '08:00:00' }
+      responses:
+        '200':
+          description: Created habit
+          content: { application/json: { schema: { $ref: '#/components/schemas/Habit' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/habits/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getHabit
+      tags: [Habits]
+      summary: Get one of the current user's habits
+      responses:
+        '200':
+          description: Habit
+          content: { application/json: { schema: { $ref: '#/components/schemas/Habit' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: updateHabit
+      tags: [Habits]
+      summary: Replace a habit's details and schedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HabitRequest' }
+      responses:
+        '200':
+          description: Updated habit
+          content: { application/json: { schema: { $ref: '#/components/schemas/Habit' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deleteHabit
+      tags: [Habits]
+      summary: Delete a habit
+      responses:
+        '200': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/habits/{id}/logs:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: logHabitCompletion
+      tags: [Habits]
+      summary: Mark the habit as done (manual completion)
+      description: Saves an activity log (source `MANUAL`) and synchronises it to the Analytics Service.
+        If `loggedAt` is omitted the current time is used.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                loggedAt: { type: string, format: date-time }
+            example: {}
+      responses:
+        '200':
+          description: Created log
+          content: { application/json: { schema: { $ref: '#/components/schemas/ActivityLog' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      operationId: listHabitLogs
+      tags: [Habits]
+      summary: Completion history (newest first)
+      responses:
+        '200':
+          description: Logs
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ActivityLog' } }
+
+  # ---------------------------------------------------------------- Challenge Service
+  /api/communities:
+    get:
+      operationId: listCommunities
+      tags: [Communities]
+      summary: Community feed (public communities plus private ones the user belongs to)
+      responses:
+        '200':
+          description: Communities
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Community' } }
+    post:
+      operationId: createCommunity
+      tags: [Communities]
+      summary: Create a community (caller becomes OWNER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommunityRequest' }
+            example: { name: Demo walkers, description: A public walking community, visibility: PUBLIC }
+      responses:
+        '200':
+          description: Created community
+          content: { application/json: { schema: { $ref: '#/components/schemas/Community' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/communities/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get:
+      operationId: getCommunity
+      tags: [Communities]
+      summary: Community details with members and challenges
+      responses:
+        '200':
+          description: Community detail
+          content: { application/json: { schema: { $ref: '#/components/schemas/CommunityDetail' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/communities/{id}/join:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      operationId: joinCommunity
+      tags: [Communities]
+      summary: Join a public community
+      responses:
+        '200':
+          description: Joined community
+          content: { application/json: { schema: { $ref: '#/components/schemas/Community' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/communities/{id}/invites:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      operationId: inviteToCommunity
+      tags: [Communities]
+      summary: Invite a same-tenant user by email (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Invite created
+          content: { application/json: { schema: { $ref: '#/components/schemas/Invite' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/invites:
+    get:
+      operationId: listMyInvites
+      tags: [Communities]
+      summary: List my pending invites
+      responses:
+        '200':
+          description: Pending invites
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Invite' } }
+  /api/invites/{id}/accept:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      operationId: acceptInvite
+      tags: [Communities]
+      summary: Accept an invite (adds community membership)
+      responses:
+        '200':
+          description: Invite accepted
+          content: { application/json: { schema: { $ref: '#/components/schemas/Invite' } } }
+        '409': { description: Invite is no longer pending }
+  /api/invites/{id}/decline:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      operationId: declineInvite
+      tags: [Communities]
+      summary: Decline an invite
+      responses:
+        '200':
+          description: Invite declined
+          content: { application/json: { schema: { $ref: '#/components/schemas/Invite' } } }
+        '409': { description: Invite is no longer pending }
+  /api/challenges:
+    get:
+      operationId: listChallenges
+      tags: [Challenges]
+      summary: Challenge feed for communities the user belongs to
+      responses:
+        '200':
+          description: Challenges
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Challenge' } }
+  /api/communities/{id}/challenges:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      operationId: createChallenge
+      tags: [Challenges]
+      summary: Create a challenge in a community (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChallengeRequest' }
+            example: { title: Walk five times, description: Build a steady walking habit, habitCategory: fitness, targetCount: 5, startDate: '2026-11-01', endDate: '2026-11-30' }
+      responses:
+        '200':
+          description: Created challenge
+          content: { application/json: { schema: { $ref: '#/components/schemas/Challenge' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/challenges/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get:
+      operationId: getChallenge
+      tags: [Challenges]
+      summary: Challenge details with leaderboard (members only)
+      description: Leaderboard `count` is `null` when analytics is temporarily unavailable.
+      responses:
+        '200':
+          description: Challenge detail
+          content: { application/json: { schema: { $ref: '#/components/schemas/ChallengeDetail' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/challenges/{id}/join:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      operationId: joinChallenge
+      tags: [Challenges]
+      summary: Join a challenge with an owned habit of the matching category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [habitId]
+              properties:
+                habitId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Participation
+          content: { application/json: { schema: { $ref: '#/components/schemas/Participant' } } }
+        '400': { description: Habit category must match the challenge category }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------- Integration Service
+  /api/integrations/partners:
+    get:
+      operationId: listPartners
+      tags: [Integrations]
+      summary: Partner catalogue
+      responses:
+        '200':
+          description: Partners
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    partner: { type: string, example: MOCK_WEARABLE }
+                    available: { type: boolean }
+  /api/integrations/connections:
+    get:
+      operationId: listConnections
+      tags: [Integrations]
+      summary: List my partner connections
+      responses:
+        '200':
+          description: Connections
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Connection' } }
+    post:
+      operationId: connectPartner
+      tags: [Integrations]
+      summary: Connect a partner device to a habit
+      description: Returns a one-time `apiKey`. Only its SHA-256 hash is stored. Only `MOCK_WEARABLE` is implemented.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [partner, habitId]
+              properties:
+                partner: { type: string, example: MOCK_WEARABLE }
+                habitId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Connection created
+          content: { application/json: { schema: { $ref: '#/components/schemas/ConnectionCreated' } } }
+        '501': { description: Partner integration is coming soon }
+  /api/integrations/connections/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    delete:
+      operationId: disconnectPartner
+      tags: [Integrations]
+      summary: Disconnect (revokes the API key)
+      responses:
+        '204': { description: Disconnected }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/integrations/events:
+    post:
+      operationId: ingestPartnerEvent
+      tags: [Integrations]
+      summary: Partner/device event ingestion
+      description: |
+        Stores the event as `RECEIVED` and publishes `PartnerEventReceived` to EventBridge. The
+        normalizer Lambda later marks it `PROCESSED` (activity log created) or `REJECTED`.
+        Re-sending the same `eventId` returns `duplicate: true` without creating a new activity.
+      security:
+        - wearableApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartnerEvent' }
+            example: { eventId: device-event-002, metric: steps, value: 4200, occurredAt: '2026-11-11T12:00:00Z' }
+      responses:
+        '202':
+          description: Accepted
+          content: { application/json: { schema: { $ref: '#/components/schemas/EventReceipt' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/integrations/connections/{id}/simulate:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      operationId: simulatePartnerEvent
+      tags: [Integrations]
+      summary: Simulate a device event for one of my connections
+      description: Missing fields default to a random `eventId`, metric `steps`, a random value and the current time.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartnerEvent' }
+            example: { metric: steps, value: 5000, eventId: demo-event-001 }
+      responses:
+        '202':
+          description: Accepted
+          content: { application/json: { schema: { $ref: '#/components/schemas/EventReceipt' } } }
+  /api/integrations/connections/{id}/events:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get:
+      operationId: listConnectionEvents
+      tags: [Integrations]
+      summary: Last 20 events for a connection with processing status
+      responses:
+        '200':
+          description: Events
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/PartnerEventView' } }
+
+  # ---------------------------------------------------------------- Analytics Service
+  /api/analytics/dashboard:
+    get:
+      operationId: getDashboard
+      tags: [Analytics]
+      summary: Per-habit dashboard (today, streak, 7-day completion %)
+      responses:
+        '200':
+          description: Dashboard rows
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/DashboardRow' } }
+        '503': { description: Activity service is unavailable }
+  /api/analytics/habits/{id}/trend:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 30 } }
+    get:
+      operationId: getHabitTrend
+      tags: [Analytics]
+      summary: Daily completion counts for a habit
+      responses:
+        '200':
+          description: Trend
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  habitId: { type: string, format: uuid }
+                  days:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, format: date }
+                        count: { type: integer }
+  /api/analytics/cohorts:
+    get:
+      operationId: getCohorts
+      tags: [Analytics]
+      summary: Tenant signup-week cohorts with 7-day activity
+      responses:
+        '200':
+          description: Cohorts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    signupWeek: { type: string, example: 2026-W46 }
+                    totalUsers: { type: integer }
+                    activeUsers: { type: integer, description: Users active in the last 7 days }
+                    activePercentage: { type: number }
+  /api/analytics/stream:
+    get:
+      operationId: streamDashboardUpdates
+      tags: [Analytics]
+      summary: Server-Sent Events stream of dashboard updates
+      description: >-
+        Emits `dashboard-updated` events (`{"updatedAt": "..."}`) and keep-alive comments.
+        Browsers pass the JWT as the `token` query parameter.
+      security:
+        - bearerAuth: []
+        - queryToken: []
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  # ---------------------------------------------------------------- Recommendation Service
+  /api/recommendations:
+    get:
+      operationId: getRecommendations
+      tags: [Recommendations]
+      summary: Personalised timing and frequency recommendations
+      description: |
+        Combines habit schedules (Activity Service), 7-day completion percentages and a 28-day
+        hourly completion histogram (Analytics Service).
+
+        - **TIMING** – at least 5 completions and the most frequent 2-hour window differs from the
+          preferred time → suggest the start of that window.
+        - **FREQUENCY** – DAILY with < 40 % completion → WEEKLY; WEEKLY with > 90 % → DAILY.
+      responses:
+        '200':
+          description: Recommendations (empty when nothing is actionable)
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Recommendation' } }
+              example:
+                - habitId: 6f1c2a52-6c8e-4c8a-9d0e-3b8b8f0f9a11
+                  type: TIMING
+                  current: '08:00'
+                  suggested: '18:00'
+                  reason: Most recorded completions occur in this two-hour window.
+        '503': { description: A required service is unavailable }
+  /api/recommendations/apply:
+    post:
+      operationId: applyRecommendation
+      tags: [Recommendations]
+      summary: Accept a recommendation and update the habit schedule
+      description: Unspecified fields keep their current values. Switching to WEEKLY without
+        `daysOfWeek` defaults to Monday, Wednesday and Friday.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplyRecommendation' }
+            examples:
+              timing: { value: { habitId: 6f1c2a52-6c8e-4c8a-9d0e-3b8b8f0f9a11, preferredTime: '18:00:00' } }
+              frequency: { value: { habitId: 6f1c2a52-6c8e-4c8a-9d0e-3b8b8f0f9a11, frequency: WEEKLY, daysOfWeek: [1, 3, 5] } }
+      responses:
+        '200':
+          description: Updated habit
+          content: { application/json: { schema: { $ref: '#/components/schemas/Habit' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Internal (private network only)
+  /internal/activity-logs:
+    post:
+      operationId: internalCreateActivityLog
+      tags: [Internal]
+      summary: (Activity) Create a WEARABLE activity log – called by the normalizer Lambda
+      description: Idempotent on `connectionId` + `externalEventId`.
+      security: [ { internalKey: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenantId, userId, habitId, connectionId, externalEventId, loggedAt]
+              properties:
+                logId: { type: string, format: uuid }
+                tenantId: { type: string, format: uuid }
+                userId: { type: string, format: uuid }
+                habitId: { type: string, format: uuid }
+                connectionId: { type: string, format: uuid }
+                externalEventId: { type: string }
+                loggedAt: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logId: { type: string, format: uuid }
+                  loggedAt: { type: string, format: date-time }
+  /internal/integrations/events/{id}/status:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    put:
+      operationId: internalUpdateEventStatus
+      tags: [Internal]
+      summary: (Integration) Update partner event status – called by the normalizer Lambda
+      security: [ { internalKey: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [PROCESSED, REJECTED] }
+                rejectReason: { type: string }
+      responses:
+        '200': { description: Updated }
+  /internal/analytics/users/signup:
+    post:
+      operationId: internalRegisterSignup
+      tags: [Internal]
+      summary: (Analytics) Register a signup for cohort analytics – called by User Service
+      security: [ { internalKey: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenantId, userId, signedUpAt]
+              properties:
+                tenantId: { type: string, format: uuid }
+                userId: { type: string, format: uuid }
+                signedUpAt: { type: string, format: date-time }
+      responses:
+        '200': { description: Registered }
+  /internal/analytics/activity:
+    post:
+      operationId: internalApplyActivity
+      tags: [Internal]
+      summary: (Analytics) Apply an activity log to aggregates – called by Activity Service
+      security: [ { internalKey: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [logId, tenantId, userId, habitId, loggedAt]
+              properties:
+                logId: { type: string, format: uuid }
+                tenantId: { type: string, format: uuid }
+                userId: { type: string, format: uuid }
+                habitId: { type: string, format: uuid }
+                loggedAt: { type: string, format: date-time }
+      responses:
+        '200': { description: Applied (idempotent per logId) }
+  /internal/analytics/habits/{id}/count:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - { name: tenantId, in: query, required: true, schema: { type: string, format: uuid } }
+      - { name: userId, in: query, required: true, schema: { type: string, format: uuid } }
+      - { name: from, in: query, required: true, schema: { type: string, format: date } }
+      - { name: to, in: query, required: true, schema: { type: string, format: date } }
+    get:
+      operationId: internalHabitCount
+      tags: [Internal]
+      summary: (Analytics) Completion count in a date range – called by Challenge Service
+      security: [ { internalKey: [] } ]
+      responses:
+        '200':
+          description: Count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  habitId: { type: string, format: uuid }
+                  count: { type: integer }
+  /internal/analytics/habits/{id}/hours:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - { name: tenantId, in: query, required: true, schema: { type: string, format: uuid } }
+      - { name: userId, in: query, required: true, schema: { type: string, format: uuid } }
+      - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 28 } }
+    get:
+      operationId: internalHabitHours
+      tags: [Internal]
+      summary: (Analytics) Hourly completion histogram – called by Recommendation Service
+      security: [ { internalKey: [] } ]
+      responses:
+        '200':
+          description: Histogram keyed by UTC hour (0–23)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  habitId: { type: string, format: uuid }
+                  hours:
+                    type: object
+                    additionalProperties: { type: integer }
+                    example: { '18': 4, '19': 2 }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    wearableApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+    internalKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+    queryToken:
+      type: apiKey
+      in: query
+      name: token
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Token:
+      description: JWT issued
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              token: { type: string }
+    BadRequest:
+      description: Validation failed
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: Missing or invalid credentials
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Not allowed (e.g. owner or membership required)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Resource not found in the caller's tenant
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    Error:
+      type: object
+      description: RFC 7807 problem detail
+      properties:
+        type: { type: string, example: about:blank }
+        title: { type: string, example: Not Found }
+        status: { type: integer, example: 404 }
+        detail: { type: string, example: Habit not found }
+        instance: { type: string }
+        errors:
+          type: object
+          additionalProperties: { type: string }
+          description: Field validation messages (validation errors only)
+    SignupRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8, maxLength: 72 }
+        name: { type: string, maxLength: 100 }
+        tenantSlug: { type: string, default: public, example: acme }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+        tenantSlug: { type: string, default: public }
+    ProfileUpdate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 100 }
+        timezone: { type: string, default: UTC }
+    Profile:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        timezone: { type: string }
+        createdAt: { type: string, format: date-time }
+    HabitRequest:
+      type: object
+      required: [name, category, frequency]
+      properties:
+        name: { type: string }
+        category: { type: string, example: fitness }
+        frequency: { type: string, enum: [DAILY, WEEKLY] }
+        daysOfWeek:
+          type: array
+          description: ISO weekdays 1 (Mon) – 7 (Sun); required for WEEKLY
+          items: { type: integer, minimum: 1, maximum: 7 }
+        preferredTime: { type: string, example: '08:00:00', description: 'Local time (HH:mm[:ss])' }
+    Habit:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        frequency: { type: string, enum: [DAILY, WEEKLY] }
+        daysOfWeek: { type: array, items: { type: integer } }
+        preferredTime: { type: string, example: '08:00:00' }
+        createdAt: { type: string, format: date-time }
+    ActivityLog:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        habitId: { type: string, format: uuid }
+        loggedAt: { type: string, format: date-time }
+        source: { type: string, enum: [MANUAL, WEARABLE] }
+    CommunityRequest:
+      type: object
+      required: [name, visibility]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        visibility: { type: string, enum: [PUBLIC, PRIVATE] }
+    Community:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        visibility: { type: string, enum: [PUBLIC, PRIVATE] }
+        createdBy: { type: string, format: uuid }
+    CommunityDetail:
+      type: object
+      properties:
+        community: { $ref: '#/components/schemas/Community' }
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              userId: { type: string, format: uuid }
+              role: { type: string, enum: [OWNER, MEMBER] }
+              joinedAt: { type: string, format: date-time }
+        challenges: { type: array, items: { $ref: '#/components/schemas/Challenge' } }
+    Invite:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        communityId: { type: string, format: uuid }
+        status: { type: string, enum: [PENDING, ACCEPTED, DECLINED] }
+    ChallengeRequest:
+      type: object
+      required: [title, habitCategory, targetCount, startDate, endDate]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        habitCategory: { type: string }
+        targetCount: { type: integer, minimum: 1 }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+    Challenge:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        communityId: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        habitCategory: { type: string }
+        targetCount: { type: integer }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+    ChallengeDetail:
+      type: object
+      properties:
+        challenge: { $ref: '#/components/schemas/Challenge' }
+        leaderboard:
+          type: array
+          items:
+            type: object
+            properties:
+              userId: { type: string, format: uuid }
+              name: { type: string }
+              count: { type: integer, nullable: true }
+              targetCount: { type: integer }
+    Participant:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        name: { type: string }
+        habitId: { type: string, format: uuid }
+    Connection:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        partner: { type: string }
+        habitId: { type: string, format: uuid }
+        status: { type: string, enum: [ACTIVE, DISCONNECTED] }
+        connectedAt: { type: string, format: date-time }
+    ConnectionCreated:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        partner: { type: string }
+        habitId: { type: string, format: uuid }
+        apiKey: { type: string, description: 'Shown once – store it securely' }
+        connectedAt: { type: string, format: date-time }
+    PartnerEvent:
+      type: object
+      properties:
+        eventId: { type: string, description: Partner-unique ID used for idempotency }
+        metric: { type: string, enum: [steps, workout] }
+        value: { type: integer, minimum: 1 }
+        occurredAt: { type: string, format: date-time, description: 'Must not be in the future or older than 7 days' }
+    EventReceipt:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string }
+        duplicate: { type: boolean }
+    PartnerEventView:
+      type: object
+      properties:
+        eventId: { type: string }
+        payload: { type: object, additionalProperties: true }
+        status: { type: string, enum: [RECEIVED, PROCESSED, REJECTED] }
+        rejectReason: { type: string, nullable: true }
+        publishAttempts: { type: integer }
+        receivedAt: { type: string, format: date-time }
+    DashboardRow:
+      type: object
+      properties:
+        habitId: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        todayCount: { type: integer }
+        doneToday: { type: boolean }
+        currentStreak: { type: integer }
+        completionPercentage: { type: number, description: Share of scheduled days completed in the last 7 days }
+    Recommendation:
+      type: object
+      properties:
+        habitId: { type: string, format: uuid }
+        type: { type: string, enum: [TIMING, FREQUENCY] }
+        current: { type: string }
+        suggested: { type: string }
+        reason: { type: string }
+    ApplyRecommendation:
+      type: object
+      required: [habitId]
+      properties:
+        habitId: { type: string, format: uuid }
+        preferredTime: { type: string, example: '18:00:00' }
+        frequency: { type: string, enum: [DAILY, WEEKLY] }
+        daysOfWeek: { type: array, items: { type: integer, minimum: 1, maximum: 7 } }
