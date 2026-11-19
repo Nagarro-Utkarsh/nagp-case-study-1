@@ -1,0 +1,11 @@
+node_modules
+.svelte-kit
+build
+dist
+coverage
+.env
+.env.*
+!.env.example
+packages/ui/.stencil
+packages/ui/loader
+packages/ui/www

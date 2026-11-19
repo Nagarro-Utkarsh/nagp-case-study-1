@@ -1,0 +1,22 @@
+{
+  "name": "habitloop-frontend",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.30.1",
+  "scripts": {
+    "dev": "pnpm --filter @habitloop/ui build && concurrently -k -n ui,web \"pnpm --filter @habitloop/ui dev\" \"pnpm --filter @habitloop/web dev\"",
+    "build": "pnpm --filter @habitloop/web... build",
+    "check": "pnpm -r check",
+    "test": "pnpm -r --if-present test",
+    "lint": "pnpm -r lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "eslint": "^9.36.0",
+    "eslint-plugin-svelte": "^3.12.2",
+    "globals": "^16.4.0",
+    "@typescript-eslint/parser": "^8.44.1",
+    "typescript-eslint": "^8.44.1",
+    "typescript": "^5.9.3"
+  }
+}
