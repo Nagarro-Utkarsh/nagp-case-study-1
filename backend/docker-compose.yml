@@ -1,0 +1,119 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: habitloop
+      POSTGRES_USER: habitloop
+      POSTGRES_PASSWORD: habitloop
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U habitloop -d habitloop"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms24m -Xmx96m -XX:+UseSerialGC -XX:ReservedCodeCacheSize=48m -XX:ActiveProcessorCount=2"
+    ports:
+      - "8000:8000"
+
+  user-service:
+    build:
+      context: .
+      dockerfile: user-service/Dockerfile
+    environment: &service-env
+      DB_URL: jdbc:postgresql://postgres:5432/habitloop
+      DB_USER: habitloop
+      DB_PASSWORD: habitloop
+      JAVA_TOOL_OPTIONS: "-Xms24m -Xmx96m -XX:+UseSerialGC -XX:ReservedCodeCacheSize=48m -XX:ActiveProcessorCount=2"
+      JWT_SECRET: local-habitloop-jwt-secret-change-this-before-deploying
+      INTERNAL_KEY: local-internal-key
+      USER_URL: http://user-service:8081
+      ACTIVITY_URL: http://activity-service:8082
+      ANALYTICS_URL: http://analytics-service:8085
+      CHALLENGE_URL: http://challenge-service:8083
+      INTEGRATION_URL: http://integration-service:8084
+      RECOMMENDATION_URL: http://recommendation-service:8086
+      FRONTEND_ORIGIN: http://localhost:5173
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+
+  activity-service:
+    build:
+      context: .
+      dockerfile: activity-service/Dockerfile
+    environment: *service-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8082:8082"
+
+  challenge-service:
+    build:
+      context: .
+      dockerfile: challenge-service/Dockerfile
+    environment: *service-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+
+  integration-service:
+    build:
+      context: .
+      dockerfile: integration-service/Dockerfile
+    environment:
+      <<: *service-env
+      INTEGRATION_PUBLISHER: direct
+    depends_on:
+      postgres:
+        condition: service_healthy
+      activity-service:
+        condition: service_started
+    ports:
+      - "8084:8084"
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: analytics-service/Dockerfile
+    environment:
+      <<: *service-env
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      ANALYTICS_TABLE: habitloop-analytics
+    depends_on:
+      dynamodb-local:
+        condition: service_started
+      activity-service:
+        condition: service_started
+    ports:
+      - "8085:8085"
+
+  recommendation-service:
+    build:
+      context: .
+      dockerfile: recommendation-service/Dockerfile
+    environment: *service-env
+    depends_on:
+      - activity-service
+      - analytics-service
+    ports:
+      - "8086:8086"
+
+volumes:
+  postgres_data:

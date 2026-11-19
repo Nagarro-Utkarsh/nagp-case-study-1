@@ -1,0 +1,150 @@
+@user = http://localhost:8081
+@activity = http://localhost:8082
+@challenge = http://localhost:8083
+@integration = http://localhost:8084
+@analytics = http://localhost:8085
+@recommendations = http://localhost:8086
+@internalKey = local-internal-key
+
+### Sign up (use the returned token as @token in subsequent requests)
+POST {{user}}/api/auth/signup
+Content-Type: application/json
+
+{
+  "email": "demo@example.com",
+  "password": "HabitLoopDemo1",
+  "name": "Demo User",
+  "tenantSlug": "public"
+}
+> {%
+client.global.set("token", response.body.token);
+%}
+
+### Login
+POST {{user}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "demo@example.com",
+  "password": "HabitLoopDemo1",
+  "tenantSlug": "public"
+}
+> {%
+client.global.set("token", response.body.token);
+%}
+
+### Create a habit
+POST {{activity}}/api/habits
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Morning walk",
+  "category": "fitness",
+  "frequency": "DAILY",
+  "daysOfWeek": [1, 2, 3, 4, 5, 6, 7],
+  "preferredTime": "08:00:00"
+}
+> {%
+client.global.set("habitId", response.body.id);
+%}
+
+### Add a manual completion
+POST {{activity}}/api/habits/{{habitId}}/logs
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{}
+
+### Dashboard, cohort aggregates, and trend
+GET {{analytics}}/api/analytics/dashboard
+Authorization: Bearer {{token}}
+
+###
+GET {{analytics}}/api/analytics/cohorts
+Authorization: Bearer {{token}}
+
+###
+GET {{analytics}}/api/analytics/habits/{{habitId}}/trend?days=30
+Authorization: Bearer {{token}}
+
+### Create a community, then create a challenge in it
+POST {{challenge}}/api/communities
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Demo walkers",
+  "description": "A public walking community",
+  "visibility": "PUBLIC"
+}
+> {%
+client.global.set("communityId", response.body.id);
+%}
+
+###
+POST {{challenge}}/api/communities/{{communityId}}/challenges
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "title": "Walk five times",
+  "description": "Build a steady walking habit",
+  "habitCategory": "fitness",
+  "targetCount": 5,
+  "startDate": "2026-11-01",
+  "endDate": "2026-11-30"
+}
+> {%
+client.global.set("challengeId", response.body.id);
+%}
+
+###
+POST {{challenge}}/api/challenges/{{challengeId}}/join
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "habitId": "{{habitId}}"
+}
+
+### Connect the mock wearable to a habit; retain the returned apiKey
+POST {{integration}}/api/integrations/connections
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "partner": "MOCK_WEARABLE",
+  "habitId": "{{habitId}}"
+}
+> {%
+client.global.set("connectionId", response.body.id);
+client.global.set("wearableApiKey", response.body.apiKey);
+%}
+
+### Simulate an event; repeat with the same eventId to demonstrate idempotency
+POST {{integration}}/api/integrations/connections/{{connectionId}}/simulate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "metric": "steps",
+  "value": 5000,
+  "eventId": "demo-event-001"
+}
+
+### Partner/device ingestion uses only the connection API key (no user JWT)
+POST {{integration}}/api/integrations/events
+X-Api-Key: {{wearableApiKey}}
+Content-Type: application/json
+
+{
+  "eventId": "demo-device-event-002",
+  "metric": "steps",
+  "value": 4200,
+  "occurredAt": "2026-11-11T12:00:00Z"
+}
+
+### Check recommendations
+GET {{recommendations}}/api/recommendations
+Authorization: Bearer {{token}}
